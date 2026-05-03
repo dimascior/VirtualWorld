@@ -11,7 +11,6 @@ ROOT = pathlib.Path(__file__).parent.parent
 ASCII_PATH = ROOT / "render_engine_v2" / "_debug_tiles" / "latest" / "ascii_preview.txt"
 READMES = [
     ROOT / "readme.md",
-    ROOT / "render_engine_v2" / "readme.md",
 ]
 
 PLACEHOLDER_RE = re.compile(
