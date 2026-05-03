@@ -1,3 +1,6 @@
+# IDE / tool directories
+.claude/
+
 # Debug and runtime files
 _debug_tiles/
 _debug_*.txt
