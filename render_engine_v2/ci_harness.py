@@ -93,9 +93,15 @@ def wait_for_server(base, timeout=45, proc=None):
 
 
 def _drain_stderr(proc):
-    """Read and print whatever the renderer wrote to stderr.
-    (No-op now that stderr is merged into stdout)"""
-    pass
+    """Read and print whatever the renderer wrote to stderr."""
+    try:
+        data = proc.stderr.read()
+        if data and data.strip():
+            print("[harness] --- renderer stderr ---", flush=True)
+            print(data.decode("utf-8", errors="replace")[:4000], flush=True)
+            print("[harness] --- end stderr ---", flush=True)
+    except Exception:
+        pass
 
 
 def wait_for_new_frames(base, prev_count, needed=1, timeout=15):
@@ -188,7 +194,8 @@ def csv_to_xml(csv_path, xml_path):
             bot.set("r", row["bot_r"]); bot.set("g", row["bot_g"]); bot.set("b", row["bot_b"])
             rows += 1
     tree = ET.ElementTree(root)
-    ET.indent(tree, space="  ")
+    if hasattr(ET, "indent"):   # added in Python 3.9
+        ET.indent(tree, space="  ")
     tree.write(xml_path, encoding="utf-8", xml_declaration=True)
     return rows
 
@@ -209,7 +216,7 @@ def main():
 
     env = dict(os.environ)
     env["DBG_DISABLE"]  = "0"
-    env["DBG_AUTODUMP"] = "1"
+    env["DBG_AUTODUMP"] = "0"  # Disable autodump to avoid lock contention on HTTP requests
     env["DBG_PORT"]     = str(args.port)
     env["PYTHONIOENCODING"] = "utf-8"  # Force UTF-8 for Unicode half-block output
 
@@ -217,11 +224,10 @@ def main():
     proc = subprocess.Popen(
         [sys.executable, RENDERER],
         env=env,
-        stdout=subprocess.PIPE,       # Capture stdout to diagnose issues
-        stderr=subprocess.STDOUT,     # Merge stderr into stdout
+        stdout=subprocess.DEVNULL,   # ANSI frame data floods a PIPE and deadlocks the renderer
+        stderr=subprocess.PIPE,      # Capture errors separately; low-volume, safe to buffer
         stdin=subprocess.DEVNULL,
         cwd=HERE,
-        text=True,
     )
 
     results = {
@@ -248,20 +254,11 @@ def main():
             else:
                 msg = f"server did not start within {args.timeout}s (process still running)"
             print(f"[harness] ERROR: {msg}")
-            
-            # Kill process and capture output
             proc.terminate()
             try:
-                out, _ = proc.communicate(timeout=2)
-                if out:
-                    print(f"[harness] --- renderer output ---")
-                    print(out)
+                proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                out, err = proc.communicate()
-                if out:
-                    print(f"[harness] --- renderer output (killed) ---")
-                    print(out)
             _drain_stderr(proc)
             results["overall"] = "FAIL"
             results["error"]   = msg

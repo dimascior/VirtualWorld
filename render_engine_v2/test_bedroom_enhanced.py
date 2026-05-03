@@ -212,8 +212,8 @@ def dump_tile_tree(frame_num, tile_grid, ascii_preview, meta):
                       "map_top_mat.txt", "ascii_preview.txt", "colors.csv"):
             src = os.path.join(base_dir, fname)
             dst = os.path.join(latest_dir, fname)
-            with open(src, "rb") as r, open(dst, "wb") as w:
-                w.write(r.read())
+            with open(src, "rb") as r, open(dst, "wb") as wdst:
+                wdst.write(r.read())
     except Exception:
         pass
 
@@ -1048,8 +1048,14 @@ def process_input(keys, camera, mode):
     return camera, mode
 
 # === MAIN ===
+sys.stderr.write("[renderer] MAIN section starting\n")
+sys.stderr.flush()
+
 sys.stdout.write(HIDE_CURSOR + CLEAR)
 sys.stdout.flush()
+
+sys.stderr.write("[renderer] creating bedroom and camera\n")
+sys.stderr.flush()
 
 bedroom = create_bedroom()
 camera = Camera()
@@ -1066,8 +1072,13 @@ last_time = time.time()
 fps = 0.0
 frame_times = []
 
+sys.stderr.write("[renderer] entering try block\n")
+sys.stderr.flush()
+
 try:
     # Initial publish so /state has data even before first frame
+    sys.stderr.write("[renderer] calling initial dbg_publish\n")
+    sys.stderr.flush()
     dbg_publish(
         "init",
         mode=mode,
@@ -1079,6 +1090,8 @@ try:
         skip_shadows=_SKIP_SHADOWS,
         show_debug=show_debug,
     )
+    sys.stderr.write("[renderer] initial publish done, entering main loop\n")
+    sys.stderr.flush()
     while True:
         frame_start = time.time()
         
