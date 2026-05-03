@@ -169,38 +169,7 @@ def dump_tile_tree(frame_num, tile_grid, ascii_preview, meta):
             tc, bc = t["top_color"], t["bot_color"]
             f.write(f"{t['x']},{t['y']},{tc[0]},{tc[1]},{tc[2]},{bc[0]},{bc[1]},{bc[2]}\n")
 
-    # Per-category folders + per-tile files
-    by_cat_root = os.path.join(base_dir, "by_category")
-    os.makedirs(by_cat_root, exist_ok=True)
-    for cat, tiles in cat_groups.items():
-        cat_dir = os.path.join(by_cat_root, cat)
-        os.makedirs(cat_dir, exist_ok=True)
-        # Index file
-        with open(os.path.join(cat_dir, "_index.txt"), "w", encoding="utf-8") as f:
-            f.write(f"category={cat} count={len(tiles)}\n")
-            for t in tiles:
-                f.write(f"{t['x']:>3},{t['y']:>3} top={t['top_name']:<14} "
-                        f"bot={t['bot_name']:<14} {t['top_hex']}/{t['bot_hex']}\n")
-        # Per-tile JSON
-        for t in tiles:
-            fn = os.path.join(cat_dir, f"{t['x']:02d}_{t['y']:02d}.json")
-            with open(fn, "w", encoding="utf-8") as f:
-                json.dump(t, f)
-
-    # Transition tiles directory
-    trans_dir = os.path.join(base_dir, "transitions")
-    os.makedirs(trans_dir, exist_ok=True)
-    with open(os.path.join(trans_dir, "_index.txt"), "w", encoding="utf-8") as f:
-        f.write(f"transition_count={len(transitions)}\n")
-        for t in transitions:
-            f.write(f"{t['x']:>3},{t['y']:>3} {t['top_category']}->{t['bot_category']} "
-                    f"{t['top_name']}->{t['bot_name']}\n")
-    for t in transitions:
-        fn = os.path.join(trans_dir, f"{t['x']:02d}_{t['y']:02d}.json")
-        with open(fn, "w", encoding="utf-8") as f:
-            json.dump(t, f)
-
-    # Mirror the top-level summaries into latest/ (skip per-tile files for speed)
+    # Mirror the top-level summaries into latest/ immediately (these are what CI validates)
     try:
         for fname in ("meta.json", "tiles.json", "map_category.txt",
                       "map_top_mat.txt", "ascii_preview.txt", "colors.csv"):
@@ -210,6 +179,39 @@ def dump_tile_tree(frame_num, tile_grid, ascii_preview, meta):
                 wdst.write(r.read())
     except Exception:
         pass
+
+    # Per-category and transition files are written in a background thread so the
+    # caller (HTTP handler or auto-dump) is not blocked by ~1200 small file writes.
+    def _write_hierarchy(_base=base_dir, _cg=cat_groups, _tr=transitions):
+        try:
+            by_cat_root = os.path.join(_base, "by_category")
+            os.makedirs(by_cat_root, exist_ok=True)
+            for cat, tiles in _cg.items():
+                cat_dir = os.path.join(by_cat_root, cat)
+                os.makedirs(cat_dir, exist_ok=True)
+                with open(os.path.join(cat_dir, "_index.txt"), "w", encoding="utf-8") as f:
+                    f.write(f"category={cat} count={len(tiles)}\n")
+                    for t in tiles:
+                        f.write(f"{t['x']:>3},{t['y']:>3} top={t['top_name']:<14} "
+                                f"bot={t['bot_name']:<14} {t['top_hex']}/{t['bot_hex']}\n")
+                for t in tiles:
+                    fn = os.path.join(cat_dir, f"{t['x']:02d}_{t['y']:02d}.json")
+                    with open(fn, "w", encoding="utf-8") as f:
+                        json.dump(t, f)
+            trans_dir = os.path.join(_base, "transitions")
+            os.makedirs(trans_dir, exist_ok=True)
+            with open(os.path.join(trans_dir, "_index.txt"), "w", encoding="utf-8") as f:
+                f.write(f"transition_count={len(_tr)}\n")
+                for t in _tr:
+                    f.write(f"{t['x']:>3},{t['y']:>3} {t['top_category']}->{t['bot_category']} "
+                            f"{t['top_name']}->{t['bot_name']}\n")
+            for t in _tr:
+                fn = os.path.join(trans_dir, f"{t['x']:02d}_{t['y']:02d}.json")
+                with open(fn, "w", encoding="utf-8") as f:
+                    json.dump(t, f)
+        except Exception:
+            pass
+    threading.Thread(target=_write_hierarchy, daemon=True).start()
 
     # Summary stats
     counts = {cat: len(tiles) for cat, tiles in cat_groups.items()}
@@ -233,6 +235,7 @@ def dbg_publish(phase, **fields):
     # Pull out non-state side-channel args (don't put in JSON state)
     _tile_grid = fields.pop("_tile_grid", None)
     _ascii_grid = fields.pop("_ascii_preview_grid", None)
+    _autodump_args = None
     with _DBG_LOCK:
         _DBG_STATE["phase"] = phase
         _DBG_STATE["timestamp"] = time.time()
@@ -279,10 +282,13 @@ def dbg_publish(phase, **fields):
                 })
                 if len(_DBG_FRAMES) > _DBG_FRAMES_MAX:
                     del _DBG_FRAMES[0:len(_DBG_FRAMES) - _DBG_FRAMES_MAX]
-                # Auto-dump tile tree on each new distinct frame
+                # Capture dump args while lock is held; actual I/O runs outside lock.
                 if _DBG_AUTODUMP and _tile_grid and _ascii_grid:
-                    try:
-                        meta = {
+                    _autodump_args = (
+                        _DBG_STATE["frame"],
+                        _tile_grid,
+                        _ascii_grid,
+                        {
                             "frame": _DBG_STATE["frame"],
                             "ts": _DBG_STATE["timestamp"],
                             "yaw_deg": _DBG_STATE["yaw_deg"],
@@ -291,14 +297,17 @@ def dbg_publish(phase, **fields):
                             "trigger_keys": list(_DBG_STATE.get("last_keys") or []),
                             "width": len(_tile_grid[0]) if _tile_grid else 0,
                             "height": len(_tile_grid),
-                        }
-                        # Run dump outside the lock would be ideal but we're
-                        # writing files - do it here, fast enough at <2 deltas/sec.
-                        dump_tile_tree(_DBG_STATE["frame"], _tile_grid, _ascii_grid, meta)
-                    except Exception:
-                        pass
+                        },
+                    )
 
         _dbg_atomic_write()
+
+    # Run tile dump after releasing the lock so the HTTP server is not blocked.
+    if _autodump_args is not None:
+        try:
+            dump_tile_tree(*_autodump_args)
+        except Exception:
+            pass
 
 class _DbgHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a, **kw):
@@ -311,7 +320,10 @@ class _DbgHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected (e.g. harness timeout) — not an error
     def do_GET(self):
         if self.path in ("/", "/state", "/state.json"):
             with _DBG_LOCK:
