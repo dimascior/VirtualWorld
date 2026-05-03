@@ -218,6 +218,70 @@ python render_engine_v2/debug_dump.py 45.0 -10.0 0.5 1.6 1.2
 
 ---
 
+## CI / Automated Validation
+
+A GitHub Actions workflow (`render-ci.yml`) runs on every push to `main`:
+
+1. **Keystroke-driven validation** — `ci_harness.py` drives the renderer entirely via HTTP `/input` and `/state` endpoints
+2. **Camera state assertions** — verifies that each keystroke produces the expected camera movement
+3. **Geometry/color export** — validates tile grid, material categories, and per-pixel color data
+4. **Format conversions** — CSV → JSON/XML for artifact storage
+5. **Gallery generation** — headless rendering of all camera poses to SVG
+6. **Commit-back** — screenshots are rebuilt and committed automatically (with `[skip ci]` to prevent loops)
+
+### Validation Output Example
+
+**Test Environment**: `windows-2022` runner, Python 3.10.11
+
+```
+[harness] starting renderer: D:\a\VirtualWorld\VirtualWorld\render_engine_v2\test_bedroom_enhanced.py
+[harness] waiting for server on http://127.0.0.1:8765 ...
+[harness] server is up (PID 5408)
+
+[harness] step 00 BASELINE      (no keys, waiting for first frame)
+[harness] step 01 TURN_RIGHT    POST keys=['l']
+           assert yaw_deg changed: PASS (0.00 → 6.88)
+[harness] step 02 TURN_RIGHT2   POST keys=['l']
+           assert yaw_deg changed: PASS (6.88 → 13.75)
+[harness] step 03 LOOK_UP       POST keys=['i']
+           assert pitch_deg changed: PASS (0.00 → -4.58)
+[harness] step 04 FORWARD       POST keys=['w']
+           assert pos changed: PASS ({0, 1.6, 0.5} → {0.0475, 1.6, 0.6943})
+[harness] step 05 FORWARD2      POST keys=['w']
+           assert pos changed: PASS ({0.0475, 1.6, 0.6943} → {0.0951, 1.6, 0.8885})
+[harness] step 06 FORWARD3      POST keys=['w']
+           assert pos changed: PASS ({0.0951, 1.6, 0.8885} → {0.1426, 1.6, 1.0828})
+[harness] step 07 TURN_LEFT     POST keys=['j']
+           assert yaw_deg changed: PASS (13.75 → 6.88)
+[harness] step 08 LOOK_DOWN     POST keys=['k']
+           assert pitch_deg changed: PASS (-4.58 → 0.00)
+
+[harness] requesting tile dump for final frame ...
+[harness] validate colors.csv: PASS
+[harness] validate tiles.json: PASS
+[harness] validate meta.json: PASS
+[harness] validate ascii_preview.txt: PASS
+[harness] validate map_category.txt: PASS
+[harness] validate colors.csv values (1200 rows): PASS
+[harness] validate tiles.json structure (1200 tiles): PASS
+[harness] converted colors.csv -> colors.json (1200 rows)
+[harness] converted colors.csv -> colors.xml (1200 rows)
+
+[harness] OVERALL: PASS
+```
+
+### Artifacts Generated
+
+Each successful CI run produces:
+- **Keystroke validation results** (`ci_results.json`) — assertion log + field changes
+- **Metadata files** — `colors.csv`, `tiles.json`, `meta.json`, `map_category.txt`, `ascii_preview.txt`
+- **Format conversions** — JSON and XML versions of color grid
+- **Bedroom gallery** — 7 SVG screenshots at different camera poses (127–132 KB each)
+- **Multi-environment gallery** — 12 SVG screenshots across 6 worlds (5–430 KB range)
+- **Zip archive** — all outputs in a single downloadable artifact for debugging
+
+---
+
 ## Controls
 
 | Key | Action |
