@@ -110,31 +110,8 @@ jobs:
       # Update README files with the latest ASCII buffer from the keystroke session
       - name: Update README with live ASCII buffer
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
-        run: |
-          # Read the ASCII preview from the latest debug tiles
-          $asciiPath = "render_engine_v2\_debug_tiles\latest\ascii_preview.txt"
-          if (Test-Path $asciiPath) {
-            $ascii = Get-Content $asciiPath -Raw
-            $ascii = $ascii.TrimEnd()  # Remove trailing whitespace
-            
-            # Function to update a readme file with new ASCII content
-            function Update-ReadmeAscii {
-              param([string]$filePath, [string]$newAscii)
-              $content = Get-Content $filePath -Raw
-              # Replace content between triple backticks in the ASCII buffer section
-              $pattern = '(?s)```\r?\n\[ASCII buffer will be inserted here by CI workflow\]\r?\n```'
-              $replacement = "````r`n$newAscii`r`n```"
-              $newContent = [regex]::Replace($content, $pattern, $replacement)
-              Set-Content $filePath $newContent
-            }
-            
-            # Update both readme files
-            Update-ReadmeAscii "readme.md" $ascii
-            Update-ReadmeAscii "render_engine_v2/readme.md" $ascii
-            
-            Write-Host "README files updated with live ASCII buffer"
-          }
+        shell: cmd
+        run: python render_engine_v2\update_readme_ascii.py
 
       # On push to main only: commit the SVG and gallery back so the README
       # always shows the latest renders from this CI run.
