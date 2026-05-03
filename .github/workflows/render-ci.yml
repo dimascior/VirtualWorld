@@ -33,6 +33,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Smoke-test headless import
+        shell: cmd
+        run: python -c "import sys; sys.path.insert(0, 'render_engine_v2'); import test_bedroom_enhanced"
+
       # Confirm exact runtime so the log is self-documenting
       - name: Print runtime info
         shell: cmd

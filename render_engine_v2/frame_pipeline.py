@@ -97,16 +97,15 @@ class FramePipeline:
         return frame_time
     
     def _adjust_scale(self, frame_time: float):
-        """Adjust resolution scale based on performance (DISABLED)."""
-        # DISABLED - always maintain full resolution
-        # User can enable if needed by setting min_scale < 1.0
+        """Conservative dynamic resolution scaling. Active when min_scale < 1.0;
+        reduces scale by 0.02 when frame_time > 2x budget, recovers by 0.01 when
+        frame_time < 0.5x budget. No-op (scale=1.0) when min_scale >= 1.0."""
         if self.min_scale >= 1.0:
             self.scale = 1.0
             return
-            
+
         target_time = 1.0 / self.target_fps
-        
-        # Very conservative scaling - only reduce in extreme cases
+
         if frame_time > target_time * 2.0 and self.scale > self.min_scale:
             self.scale = max(self.min_scale, self.scale - 0.02)
         elif frame_time < target_time * 0.5 and self.scale < 1.0:

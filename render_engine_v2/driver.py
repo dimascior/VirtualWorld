@@ -2,28 +2,23 @@
 ground state after each step. No terminal window, no HTTP, no keystroke injection."""
 import sys, os, math
 
-os.environ["DBG_DISABLE"] = "1"
+os.environ.setdefault("DBG_DISABLE", "1")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_bedroom_enhanced as _r  # noqa: E402
 
-src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_bedroom_enhanced.py")
-with open(src_path, "r", encoding="utf-8") as f:
-    src = f.read()
-header = src[:src.index("# === MAIN ===")]
-ns = {"__name__": "_headless", "__file__": src_path}
-exec(compile(header, src_path, "exec"), ns)
-
-Vec3 = ns["Vec3"]
-Camera = ns["Camera"]
-trace_ray = ns["trace_ray"]
-create_bedroom = ns["create_bedroom"]
-render_frame_enhanced = ns["render_frame_enhanced"]
-MAT_NAME = ns["MAT_NAME"]
-MAT_CATEGORY = ns["MAT_CATEGORY"]
-MAT_CAT_CHAR = ns["MAT_CAT_CHAR"]
-MOVE_SPEED = ns["MOVE_SPEED"]
-TURN_SPEED = ns["TURN_SPEED"]
-PITCH_SPEED = ns["PITCH_SPEED"]
-WIDTH = ns["WIDTH"]
-HEIGHT = ns["HEIGHT"]
+Vec3 = _r.Vec3
+Camera = _r.Camera
+trace_ray = _r.trace_ray
+create_bedroom = _r.create_bedroom
+render_frame_enhanced = _r.render_frame_enhanced
+MAT_NAME = _r.MAT_NAME
+MAT_CATEGORY = _r.MAT_CATEGORY
+MAT_CAT_CHAR = _r.MAT_CAT_CHAR
+MOVE_SPEED = _r.MOVE_SPEED
+TURN_SPEED = _r.TURN_SPEED
+PITCH_SPEED = _r.PITCH_SPEED
+WIDTH = _r.WIDTH
+HEIGHT = _r.HEIGHT
 
 bedroom = create_bedroom()
 camera = Camera()

@@ -26,25 +26,21 @@ HERE    = os.path.dirname(os.path.abspath(__file__))
 PARENT  = os.path.dirname(HERE)
 
 # ---------------------------------------------------------------------------
-# Load renderer source headlessly (same pattern as driver.py)
+# Load renderer as a normal importable module
 # ---------------------------------------------------------------------------
 os.environ.setdefault("DBG_DISABLE", "1")
+sys.path.insert(0, HERE)
+import test_bedroom_enhanced as _r  # noqa: E402
 
-_src_path = os.path.join(HERE, "test_bedroom_enhanced.py")
-with open(_src_path, "r", encoding="utf-8") as _f:
-    _src = _f.read()
-_ns = {"__name__": "_headless", "__file__": _src_path}
-exec(compile(_src[: _src.index("# === MAIN ===")], _src_path, "exec"), _ns)
-
-Vec3                 = _ns["Vec3"]
-Camera               = _ns["Camera"]
-create_bedroom       = _ns["create_bedroom"]
-render_frame_enhanced= _ns["render_frame_enhanced"]
-MOVE_SPEED           = _ns["MOVE_SPEED"]
-TURN_SPEED           = _ns["TURN_SPEED"]
-PITCH_SPEED          = _ns["PITCH_SPEED"]
-WIDTH                = _ns["WIDTH"]
-HEIGHT               = _ns["HEIGHT"]
+Vec3                 = _r.Vec3
+Camera               = _r.Camera
+create_bedroom       = _r.create_bedroom
+render_frame_enhanced= _r.render_frame_enhanced
+MOVE_SPEED           = _r.MOVE_SPEED
+TURN_SPEED           = _r.TURN_SPEED
+PITCH_SPEED          = _r.PITCH_SPEED
+WIDTH                = _r.WIDTH
+HEIGHT               = _r.HEIGHT
 
 # ---------------------------------------------------------------------------
 # Import SVG builder from sibling module

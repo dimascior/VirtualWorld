@@ -448,11 +448,7 @@ def _start_dbg_server():
     time.sleep(0.2)  # Give server a moment to bind
     return t
 
-sys.stderr.write("[renderer] about to call _start_dbg_server()\n")
-sys.stderr.flush()
-_DBG_THREAD = _start_dbg_server()
-sys.stderr.write("[renderer] _DBG_THREAD created\n")
-sys.stderr.flush()
+_DBG_THREAD = None  # started in __main__ only
 
 # ANSI codes
 CLEAR = "\033[2J"
@@ -487,6 +483,14 @@ use_edge_detection = False  # Disabled for speed - toggle with 'E' key
 _SKIP_SHADOWS = False   # Toggle with 'T' key for ~2x speedup
 USE_BACKGROUND_COLOR = True  # Solid surface rendering
 TARGET_FPS = 30         # Target frame rate
+
+# Gamma correction LUT (sRGB 2.2) — matches FramePipeline.gamma_correct()
+_GAMMA_TABLE = [int(pow(i / 255.0, 1.0 / 2.2) * 255) for i in range(256)]
+
+def _gamma(color):
+    return (_GAMMA_TABLE[max(0, min(255, color[0]))],
+            _GAMMA_TABLE[max(0, min(255, color[1]))],
+            _GAMMA_TABLE[max(0, min(255, color[2]))])
 
 # Half-block characters for 2x vertical resolution
 UPPER_HALF = '▀'
@@ -874,10 +878,12 @@ def render_frame_enhanced(camera, objects, light_pos, frame):
                 # Top pixel
                 ray_dir1 = camera.get_ray_dir(x, top_y, WIDTH, render_height)
                 top_color, top_mat, _ = trace_ray(camera.pos, ray_dir1, objects, light_pos)
+                top_color = _gamma(top_color)
                 
                 # Bottom pixel
                 ray_dir2 = camera.get_ray_dir(x, bot_y, WIDTH, render_height)
                 bot_color, bot_mat, _ = trace_ray(camera.pos, ray_dir2, objects, light_pos)
+                bot_color = _gamma(bot_color)
                 
                 # Output with half-block
                 buffer[char_y][x] = UPPER_HALF
@@ -1032,130 +1038,35 @@ def process_input(keys, camera, mode):
     return camera, mode
 
 # === MAIN ===
-sys.stdout.write(HIDE_CURSOR + CLEAR)
-sys.stdout.flush()
-
-bedroom = create_bedroom()
-camera = Camera()
-camera.pos = Vec3(0, 1.6, 0.5)
-
-main_light = Vec3(0, 2.7, 2)
-secondary_light = Vec3(-1.5, 2.0, 3.0)  # Near desk
-
-# Control mode: 'auto' for automatic rotation, 'manual' for keyboard control
-mode = 'manual'
-show_debug = False
-frame = 0
-last_time = time.time()
-fps = 0.0
-frame_times = []
-
-try:
-    # Initial publish so /state has data even before first frame
-    dbg_publish(
-        "init",
-        mode=mode,
-        pos=[camera.pos.x, camera.pos.y, camera.pos.z],
-        yaw_deg=math.degrees(camera.yaw),
-        pitch_deg=math.degrees(camera.pitch),
-        use_msaa=use_msaa,
-        use_edge_detection=use_edge_detection,
-        skip_shadows=_SKIP_SHADOWS,
-        show_debug=show_debug,
-    )
-    sys.stderr.write("[renderer] initial publish done, entering main loop\n")
+if __name__ == "__main__":
+    sys.stderr.write("[renderer] about to call _start_dbg_server()\n")
     sys.stderr.flush()
-    while True:
-        frame_start = time.time()
-        
-        # Drain queued keys from POST /input (one per wait_frames, no dedupe)
-        queued_keys = []
-        with _DBG_LOCK:
-            if _DBG_INPUT_QUEUE:
-                if _DBG_INPUT_WAIT <= 0:
-                    k, wf = _DBG_INPUT_QUEUE.pop(0)
-                    queued_keys.append(k)
-                    _DBG_INPUT_WAIT = wf - 1
-                else:
-                    _DBG_INPUT_WAIT -= 1
+    _DBG_THREAD = _start_dbg_server()
+    sys.stderr.write("[renderer] _DBG_THREAD created\n")
+    sys.stderr.flush()
 
-        # Process keyboard input (human keys deduped, queued keys prepended verbatim)
-        keys = get_keyboard_input()
-        keys = queued_keys + keys
-        result, mode = process_input(keys, camera, mode)
-        if result is None:  # Quit requested
-            dbg_publish("quit", last_keys=keys, mode=mode)
-            break
-        camera = result
+    sys.stdout.write(HIDE_CURSOR + CLEAR)
+    sys.stdout.flush()
 
-        # Publish keystroke event immediately (BEFORE render) so the agent
-        # sees pose updates even on slow frames
-        if keys:
-            with _DBG_LOCK:
-                _DBG_STATE["key_seq"] = _DBG_STATE.get("key_seq", 0) + 1
-            dbg_publish(
-                "keystroke",
-                last_keys=keys,
-                mode=mode,
-                pos=[camera.pos.x, camera.pos.y, camera.pos.z],
-                yaw_deg=math.degrees(camera.yaw),
-                pitch_deg=math.degrees(camera.pitch),
-                use_msaa=use_msaa,
-                use_edge_detection=use_edge_detection,
-                skip_shadows=_SKIP_SHADOWS,
-                show_debug=show_debug,
-            )
-        
-        # Auto-rotate in auto mode
-        if mode == 'auto':
-            camera.yaw = math.sin(frame * 0.04) * 1.0  # Faster, wider sweep
-            camera.pitch = math.sin(frame * 0.025) * 0.25
-        
-        # Render
-        buffer, colors, ascii_preview, tile_grid = render_frame_enhanced(camera, bedroom, main_light, frame)
-        
-        # Calculate FPS
-        current_time = time.time()
-        frame_times.append(current_time - frame_start)
-        if len(frame_times) > 20:
-            frame_times.pop(0)
-        if frame_times:
-            avg_frame_time = sum(frame_times) / len(frame_times)
-            fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
-        
-        # UI
-        draw_ui_enhanced(buffer, colors, frame, camera, fps, mode)
+    bedroom = create_bedroom()
+    camera = Camera()
+    camera.pos = Vec3(0, 1.6, 0.5)
 
-        # Debug overlay (X to toggle): show center-pixel hit info
-        if globals().get('show_debug', False):
-            cx, cy = WIDTH // 2, HEIGHT
-            ray = camera.get_ray_dir(cx, cy, WIDTH, HEIGHT * 2 if use_half_blocks else HEIGHT)
-            _, hit_id, hit_t = trace_ray(camera.pos, ray, bedroom, main_light)
-            dbg = f"R({ray.x:+.2f},{ray.y:+.2f},{ray.z:+.2f}) hit={hit_id} t={hit_t if hit_t!=float('inf') else -1:.2f}"
-            for i, c in enumerate(dbg[:WIDTH - 2]):
-                if 2 + i < WIDTH:
-                    buffer[2][2 + i] = c
-                    colors[2][2 + i] = rgb(255, 220, 80)
-        
-        # Output
-        sys.stdout.write(HOME)
-        for y in range(HEIGHT):
-            sys.stdout.write(goto(y + 1, 1))
-            line = ''.join(colors[y][x] + buffer[y][x] for x in range(WIDTH))
-            sys.stdout.write(line + RESET)
-        sys.stdout.flush()
+    main_light = Vec3(0, 2.7, 2)
+    secondary_light = Vec3(-1.5, 2.0, 3.0)  # Near desk
 
-        # Publish per-frame debug state. Cheap one extra center-ray trace.
-        cx_mid, cy_mid = WIDTH // 2, HEIGHT
-        _ray = camera.get_ray_dir(cx_mid, cy_mid, WIDTH, HEIGHT * 2 if use_half_blocks else HEIGHT)
-        _, _hid, _ht = trace_ray(camera.pos, _ray, bedroom, main_light)
-        # Stash latest tile grid for /tiles endpoint (in-memory only)
-        with _DBG_LOCK:
-            globals()['_DBG_LATEST_TILES'] = tile_grid
+    # Control mode: 'auto' for automatic rotation, 'manual' for keyboard control
+    mode = 'manual'
+    show_debug = False
+    frame = 0
+    last_time = time.time()
+    fps = 0.0
+    frame_times = []
+
+    try:
+        # Initial publish so /state has data even before first frame
         dbg_publish(
-            "frame",
-            frame=frame,
-            fps=fps,
+            "init",
             mode=mode,
             pos=[camera.pos.x, camera.pos.y, camera.pos.z],
             yaw_deg=math.degrees(camera.yaw),
@@ -1164,36 +1075,132 @@ try:
             use_edge_detection=use_edge_detection,
             skip_shadows=_SKIP_SHADOWS,
             show_debug=show_debug,
-            center_ray=[_ray.x, _ray.y, _ray.z],
-            center_hit_id=_hid,
-            center_depth=(_ht if _ht != float('inf') else -1.0),
-            ascii_preview=[''.join(row) for row in ascii_preview],
-            last_keys=keys,  # may be empty for idle frames; reflects this-frame input
-            _tile_grid=tile_grid,  # forwarded to dump on delta
-            _ascii_preview_grid=ascii_preview,
         )
+        sys.stderr.write("[renderer] initial publish done, entering main loop\n")
+        sys.stderr.flush()
+        while True:
+            frame_start = time.time()
 
-        frame += 1
-        
-        # Maximum frame rate - minimal sleep for responsiveness
-        elapsed = time.time() - frame_start
-        target_time = 1.0 / TARGET_FPS
-        sleep_time = max(0.001, target_time - elapsed)
-        time.sleep(sleep_time)
-    
-    # Completion message
-    sys.stdout.write(goto(HEIGHT + 2, 1))
-    print(f"\n{BOLD}{rgb(100, 255, 100)}✓ Session Complete! ({frame} frames){RESET}")
-    print(f"{rgb(200,200,200)}  Controls used:")
-    print(f"  • WASD - Move camera position")
-    print(f"  • Arrow keys / IJKL - Look around")
-    print(f"  • SPACE - Toggle auto/manual mode")
-    print(f"  • Q - Quit")
-    print(f"  Average FPS: {fps:.1f}{RESET}\n")
+            # Drain queued keys from POST /input (one per wait_frames, no dedupe)
+            queued_keys = []
+            with _DBG_LOCK:
+                if _DBG_INPUT_QUEUE:
+                    if _DBG_INPUT_WAIT <= 0:
+                        k, wf = _DBG_INPUT_QUEUE.pop(0)
+                        queued_keys.append(k)
+                        _DBG_INPUT_WAIT = wf - 1
+                    else:
+                        _DBG_INPUT_WAIT -= 1
 
-except KeyboardInterrupt:
-    sys.stdout.write(goto(HEIGHT + 2, 1))
-    print(f"\n{rgb(255, 200, 100)}Render interrupted after {frame} frames{RESET}\n")
-finally:
-    sys.stdout.write(SHOW_CURSOR + RESET)
-    sys.stdout.flush()
+            # Process keyboard input (human keys deduped, queued keys prepended verbatim)
+            keys = get_keyboard_input()
+            keys = queued_keys + keys
+            result, mode = process_input(keys, camera, mode)
+            if result is None:  # Quit requested
+                dbg_publish("quit", last_keys=keys, mode=mode)
+                break
+            camera = result
+
+            # Publish keystroke event immediately (BEFORE render) so the agent
+            # sees pose updates even on slow frames
+            if keys:
+                with _DBG_LOCK:
+                    _DBG_STATE["key_seq"] = _DBG_STATE.get("key_seq", 0) + 1
+                dbg_publish(
+                    "keystroke",
+                    last_keys=keys,
+                    mode=mode,
+                    pos=[camera.pos.x, camera.pos.y, camera.pos.z],
+                    yaw_deg=math.degrees(camera.yaw),
+                    pitch_deg=math.degrees(camera.pitch),
+                    use_msaa=use_msaa,
+                    use_edge_detection=use_edge_detection,
+                    skip_shadows=_SKIP_SHADOWS,
+                    show_debug=show_debug,
+                )
+
+            # Auto-rotate in auto mode
+            if mode == 'auto':
+                camera.yaw = math.sin(frame * 0.04) * 1.0  # Faster, wider sweep
+                camera.pitch = math.sin(frame * 0.025) * 0.25
+
+            # Render
+            buffer, colors, ascii_preview, tile_grid = render_frame_enhanced(camera, bedroom, main_light, frame)
+
+            # Calculate FPS
+            current_time = time.time()
+            frame_times.append(current_time - frame_start)
+            if len(frame_times) > 20:
+                frame_times.pop(0)
+            if frame_times:
+                avg_frame_time = sum(frame_times) / len(frame_times)
+                fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
+
+            # UI
+            draw_ui_enhanced(buffer, colors, frame, camera, fps, mode)
+
+            # Debug overlay (X to toggle): show center-pixel hit info
+            if globals().get('show_debug', False):
+                cx, cy = WIDTH // 2, HEIGHT
+                ray = camera.get_ray_dir(cx, cy, WIDTH, HEIGHT * 2 if use_half_blocks else HEIGHT)
+                _, hit_id, hit_t = trace_ray(camera.pos, ray, bedroom, main_light)
+                dbg = f"R({ray.x:+.2f},{ray.y:+.2f},{ray.z:+.2f}) hit={hit_id} t={hit_t if hit_t!=float('inf') else -1:.2f}"
+                for i, c in enumerate(dbg[:WIDTH - 2]):
+                    if 2 + i < WIDTH:
+                        buffer[2][2 + i] = c
+                        colors[2][2 + i] = rgb(255, 220, 80)
+
+            # Output
+            sys.stdout.write(HOME)
+            for y in range(HEIGHT):
+                sys.stdout.write(goto(y + 1, 1))
+                line = ''.join(colors[y][x] + buffer[y][x] for x in range(WIDTH))
+                sys.stdout.write(line + RESET)
+            sys.stdout.flush()
+
+            # Publish per-frame debug state. Cheap one extra center-ray trace.
+            cx_mid, cy_mid = WIDTH // 2, HEIGHT
+            _ray = camera.get_ray_dir(cx_mid, cy_mid, WIDTH, HEIGHT * 2 if use_half_blocks else HEIGHT)
+            _, _hid, _ht = trace_ray(camera.pos, _ray, bedroom, main_light)
+            # Stash latest tile grid for /tiles endpoint (in-memory only)
+            with _DBG_LOCK:
+                globals()['_DBG_LATEST_TILES'] = tile_grid
+            dbg_publish(
+                "frame",
+                frame=frame,
+                fps=fps,
+                mode=mode,
+                pos=[camera.pos.x, camera.pos.y, camera.pos.z],
+                yaw_deg=math.degrees(camera.yaw),
+                pitch_deg=math.degrees(camera.pitch),
+                use_msaa=use_msaa,
+                use_edge_detection=use_edge_detection,
+                skip_shadows=_SKIP_SHADOWS,
+                show_debug=show_debug,
+                center_ray=[_ray.x, _ray.y, _ray.z],
+                center_hit_id=_hid,
+                center_depth=(_ht if _ht != float('inf') else -1.0),
+                ascii_preview=[''.join(row) for row in ascii_preview],
+                last_keys=keys,  # may be empty for idle frames; reflects this-frame input
+                _tile_grid=tile_grid,  # forwarded to dump on delta
+                _ascii_preview_grid=ascii_preview,
+            )
+
+            frame += 1
+
+            # Frame cap: sleep only when ahead of budget; skip sleep when over budget
+            elapsed = time.time() - frame_start
+            sleep_time = (1.0 / TARGET_FPS) - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        sys.stdout.write(goto(HEIGHT + 2, 1))
+        print(f"\n{BOLD}{rgb(100, 255, 100)}Render complete ({frame} frames){RESET}")
+        print(f"{rgb(200,200,200)}  Average FPS: {fps:.1f}{RESET}\n")
+
+    except KeyboardInterrupt:
+        sys.stdout.write(goto(HEIGHT + 2, 1))
+        print(f"\n{rgb(255, 200, 100)}Render interrupted after {frame} frames{RESET}\n")
+    finally:
+        sys.stdout.write(SHOW_CURSOR + RESET)
+        sys.stdout.flush()
