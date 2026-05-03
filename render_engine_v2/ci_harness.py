@@ -13,7 +13,7 @@ Exit codes:
     2  Harness error (server unreachable, subprocess crash, etc.)
 """
 
-import subprocess, sys, os, json, time, csv, shutil
+import subprocess, sys, os, json, time, csv, shutil, threading, queue
 import urllib.request, urllib.error
 import xml.etree.ElementTree as ET
 import argparse
@@ -93,15 +93,9 @@ def wait_for_server(base, timeout=45, proc=None):
 
 
 def _drain_stderr(proc):
-    """Read and print whatever the renderer wrote to stderr."""
-    try:
-        data = proc.stderr.read()
-        if data and data.strip():
-            print("[harness] --- renderer stderr ---", flush=True)
-            print(data.decode("utf-8", errors="replace")[:4000], flush=True)
-            print("[harness] --- end stderr ---", flush=True)
-    except Exception:
-        pass
+    """Read and print whatever the renderer wrote to stderr.
+    (No-op now that stderr is merged into stdout)"""
+    pass
 
 
 def wait_for_new_frames(base, prev_count, needed=1, timeout=15):
@@ -223,10 +217,11 @@ def main():
     proc = subprocess.Popen(
         [sys.executable, RENDERER],
         env=env,
-        stdout=subprocess.DEVNULL,   # ANSI escape codes are not useful in CI
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,    # keep msvcrt.kbhit() from blocking on inherited pipe
+        stdout=subprocess.PIPE,       # Capture stdout to diagnose issues
+        stderr=subprocess.STDOUT,     # Merge stderr into stdout
+        stdin=subprocess.DEVNULL,
         cwd=HERE,
+        text=True,
     )
 
     results = {
@@ -244,13 +239,29 @@ def main():
         # Phase 1: wait for HTTP server
         # ----------------------------------------------------------------
         print(f"[harness] waiting for server on {base} ...")
-        time.sleep(0.5)  # Give subprocess time to start and daemon thread to bind socket
+        time.sleep(1.0)  # Give subprocess more time to initialize
+        
         if not wait_for_server(base, timeout=args.timeout, proc=proc):
             rc = proc.poll()
-            msg = (f"renderer exited with code {rc}" if rc is not None
-                   else f"server did not start within {args.timeout}s")
+            if rc is not None:
+                msg = f"renderer exited with code {rc} before server started"
+            else:
+                msg = f"server did not start within {args.timeout}s (process still running)"
             print(f"[harness] ERROR: {msg}")
+            
+            # Kill process and capture output
             proc.terminate()
+            try:
+                out, _ = proc.communicate(timeout=2)
+                if out:
+                    print(f"[harness] --- renderer output ---")
+                    print(out)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+                if out:
+                    print(f"[harness] --- renderer output (killed) ---")
+                    print(out)
             _drain_stderr(proc)
             results["overall"] = "FAIL"
             results["error"]   = msg
