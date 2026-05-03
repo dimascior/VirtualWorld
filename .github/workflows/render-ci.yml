@@ -1,0 +1,149 @@
+name: Render Engine CI
+
+# Drives the renderer via POST /input (HTTP keystroke injection),
+# validates debug output (colors.csv, tiles.json, etc.),
+# converts artifacts to JSON and XML, generates an SVG screenshot,
+# and commits the SVG back to the repo so the README always shows
+# the latest live render on github.com.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  keystroke-validation:
+    name: Keystroke script + output validation (windows-2022 / Python 3.10)
+    runs-on: windows-2022          # pinned image — never drifts silently
+
+    # contents: write is needed for the commit-back step on push to main
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so git push works; token gives write permission
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      # Confirm exact runtime so the log is self-documenting
+      - name: Print runtime info
+        shell: cmd
+        run: |
+          python --version
+          python -c "import sys; print('platform:', sys.platform)"
+
+      # Run the harness.
+      # The harness:
+      #   1. Starts test_bedroom_enhanced.py as a subprocess (HTTP server on :8765)
+      #   2. Waits for GET /state to respond
+      #   3. Executes the STEPS keystroke script via POST /input
+      #   4. After each keystroke waits for a new distinct frame in GET /frames
+      #   5. Asserts the expected camera field changed (yaw_deg, pitch_deg, pos)
+      #   6. Forces a tile dump via GET /tiles/dump for the final frame
+      #   7. Validates colors.csv, tiles.json, meta.json, ascii_preview.txt
+      #   8. Converts colors.csv -> _ci_output/colors.json and colors.xml
+      #   9. Sends POST /input {"keys": ["q"]} to quit cleanly
+      #  10. Writes _ci_output/ci_results.json (overall: PASS | FAIL)
+      - name: Run CI harness
+        shell: cmd
+        run: python render_engine_v2\ci_harness.py --out-dir render_engine_v2\_ci_output --timeout 60
+
+      # Fail the step if ci_results.json reports FAIL
+      - name: Check overall result
+        shell: pwsh
+        run: |
+          $results = Get-Content render_engine_v2\_ci_output\ci_results.json | ConvertFrom-Json
+          Write-Host "Overall: $($results.overall)"
+          Write-Host ""
+          Write-Host "--- Assertions ---"
+          $results.assertions | Format-Table step, field, before, after, status
+          Write-Host "--- Validations ---"
+          $results.validations | Format-Table
+          Write-Host "--- Conversions ---"
+          $results.conversions | Format-Table
+          if ($results.overall -ne "PASS") {
+            Write-Error "CI harness reported FAIL"
+            exit 1
+          }
+
+      # Generate SVG screenshot from the live render output.
+      # gen_screenshot_svg.py reads colors.csv (real RGB from the ray tracer)
+      # and builds a static SVG where each cell = 2 stacked colored rectangles.
+      # RLE merges adjacent same-color cells per row so the file stays compact.
+      - name: Generate SVG screenshot
+        shell: cmd
+        run: >
+          python render_engine_v2\gen_screenshot_svg.py
+          --csv render_engine_v2\_debug_tiles\latest\colors.csv
+          --meta render_engine_v2\_debug_tiles\latest\meta.json
+          --out render_engine_v2\render_screenshot.svg
+
+      # Render all gallery poses headlessly (no running renderer needed).
+      # gen_gallery.py execs the renderer source directly, calls
+      # render_frame_enhanced() for each pose, and writes one SVG per pose
+      # plus a gallery.md snippet under render_engine_v2/screenshots/.
+      - name: Generate bedroom gallery screenshots
+        shell: cmd
+        run: >
+          python render_engine_v2\gen_gallery.py
+          --out-dir render_engine_v2\screenshots
+
+      # Render all six multi-environment scenes headlessly.
+      # gen_multi_gallery.py imports environments.py and frame_pipeline.py
+      # directly (pure Python, no platform imports), renders 12 curated poses
+      # across Bedroom / Office / Corridor / Park / Dungeon / Abstract, and
+      # writes env_XX_name.svg + multi_gallery.md into screenshots/.
+      - name: Generate multi-environment gallery
+        shell: cmd
+        run: >
+          python render_engine_v2\gen_multi_gallery.py
+          --out-dir render_engine_v2\screenshots
+
+      # On push to main only: commit the SVG and gallery back so the README
+      # always shows the latest renders from this CI run.
+      # [skip ci] prevents an infinite loop — this commit will NOT re-trigger
+      # the workflow.
+      - name: Commit updated screenshots
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add render_engine_v2/render_screenshot.svg
+          git add render_engine_v2/screenshots/
+          $changed = git diff --cached --stat
+          if ($changed) {
+            git commit -m "ci: update render screenshots [skip ci]"
+            git push
+            Write-Host "Screenshots committed and pushed."
+          } else {
+            Write-Host "Screenshots unchanged — nothing to commit."
+          }
+
+      # Always upload so failed runs still have artifacts for debugging
+      - name: Upload render artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-evidence-${{ github.sha }}
+          retention-days: 90
+          path: |
+            render_engine_v2/_ci_output/ci_results.json
+            render_engine_v2/_ci_output/colors.json
+            render_engine_v2/_ci_output/colors.xml
+            render_engine_v2/_ci_output/colors.csv
+            render_engine_v2/_ci_output/tiles.json
+            render_engine_v2/_ci_output/meta.json
+            render_engine_v2/_ci_output/ascii_preview.txt
+            render_engine_v2/_ci_output/map_category.txt
+            render_engine_v2/render_screenshot.svg
+            render_engine_v2/screenshots/
