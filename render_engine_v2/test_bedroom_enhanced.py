@@ -1,6 +1,9 @@
 import time, sys, math, random
 import os, json, threading, http.server, socketserver
 
+sys.stderr.write("[renderer] module init starting\n")
+sys.stderr.flush()
+
 # Try to enable ANSI/UTF-8 in Windows console; skip on headless runners
 try:
     import msvcrt  # Windows keyboard input
@@ -14,13 +17,16 @@ except Exception:
     # HTTP server will still start and serve debug data
     msvcrt = None
 
+sys.stderr.write("[renderer] msvcrt setup done\n")
+sys.stderr.flush()
+
 # === LIVE DEBUG SERVER ===
 # Reports renderer state after every keystroke and every frame.
 # Two channels:
 #   - File: <script_dir>/_debug_state.json (atomic, rewritten per update)
 #   - HTTP: http://127.0.0.1:8765/state  /ascii  /events
 # Disable by setting env DBG_DISABLE=1
-_DBG_DISABLED = bool(os.environ.get("DBG_DISABLE"))
+_DBG_DISABLED = os.environ.get("DBG_DISABLE") == "1"
 _DBG_PORT = int(os.environ.get("DBG_PORT", "8765"))
 _DBG_DIR = os.path.dirname(os.path.abspath(__file__))
 _DBG_STATE_FILE = os.path.join(_DBG_DIR, "_debug_state.json")
@@ -428,7 +434,11 @@ class _DbgHandler(http.server.BaseHTTPRequestHandler):
             self._send(404, '{"error":"not found"}')
 
 def _start_dbg_server():
+    sys.stderr.write("[renderer] _start_dbg_server() called\n")
+    sys.stderr.flush()
     if _DBG_DISABLED:
+        sys.stderr.write("[renderer] DBG disabled, skipping server\n")
+        sys.stderr.flush()
         return None
     def serve():
         try:
@@ -436,6 +446,8 @@ def _start_dbg_server():
             class ReuseAddrTCPServer(socketserver.TCPServer):
                 allow_reuse_address = True
             
+            sys.stderr.write(f"[renderer] creating server on 127.0.0.1:{_DBG_PORT}\n")
+            sys.stderr.flush()
             server = ReuseAddrTCPServer(("127.0.0.1", _DBG_PORT), _DbgHandler)
             print(f"[dbg] HTTP server started on port {_DBG_PORT}", file=sys.stderr, flush=True)
             server.serve_forever()
@@ -445,10 +457,18 @@ def _start_dbg_server():
             traceback.print_exc(file=sys.stderr)
     t = threading.Thread(target=serve, daemon=True)
     t.start()
+    sys.stderr.write("[renderer] server thread started, sleeping 0.2s\n")
+    sys.stderr.flush()
     time.sleep(0.2)  # Give server a moment to bind
+    sys.stderr.write("[renderer] _start_dbg_server() done\n")
+    sys.stderr.flush()
     return t
 
+sys.stderr.write("[renderer] about to call _start_dbg_server()\n")
+sys.stderr.flush()
 _DBG_THREAD = _start_dbg_server()
+sys.stderr.write("[renderer] _DBG_THREAD created\n")
+sys.stderr.flush()
 
 # ANSI codes
 CLEAR = "\033[2J"
