@@ -217,6 +217,7 @@ def main():
     env["DBG_DISABLE"]  = "0"
     env["DBG_AUTODUMP"] = "1"
     env["DBG_PORT"]     = str(args.port)
+    env["PYTHONIOENCODING"] = "utf-8"  # Force UTF-8 for Unicode half-block output
 
     print(f"[harness] starting renderer: {RENDERER}")
     proc = subprocess.Popen(
