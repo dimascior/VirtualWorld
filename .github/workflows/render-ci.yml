@@ -115,8 +115,8 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "dimascior"
+          git config user.email "dimasciorobert@gmail.com"
           git add render_engine_v2/render_screenshot.svg
           git add render_engine_v2/screenshots/
           $changed = git diff --cached --stat
