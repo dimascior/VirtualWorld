@@ -79,15 +79,29 @@ def _tile_dump(base):
 # ---------------------------------------------------------------------------
 # Wait helpers
 # ---------------------------------------------------------------------------
-def wait_for_server(base, timeout=45):
+def wait_for_server(base, timeout=45, proc=None):
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False   # process already exited — no point waiting
         try:
             _get_state(base)
             return True
         except Exception:
             time.sleep(0.3)
     return False
+
+
+def _drain_stderr(proc):
+    """Read and print whatever the renderer wrote to stderr."""
+    try:
+        data = proc.stderr.read()
+        if data and data.strip():
+            print("[harness] --- renderer stderr ---", flush=True)
+            print(data.decode("utf-8", errors="replace")[:4000], flush=True)
+            print("[harness] --- end stderr ---", flush=True)
+    except Exception:
+        pass
 
 
 def wait_for_new_frames(base, prev_count, needed=1, timeout=15):
@@ -229,12 +243,17 @@ def main():
         # Phase 1: wait for HTTP server
         # ----------------------------------------------------------------
         print(f"[harness] waiting for server on {base} ...")
-        if not wait_for_server(base, timeout=args.timeout):
-            print(f"[harness] ERROR: server did not start within {args.timeout}s")
-            results["overall"] = "FAIL"
-            results["error"]   = "server_timeout"
-            _write_results(results, args.out_dir)
+        time.sleep(0.5)  # Give subprocess time to start and daemon thread to bind socket
+        if not wait_for_server(base, timeout=args.timeout, proc=proc):
+            rc = proc.poll()
+            msg = (f"renderer exited with code {rc}" if rc is not None
+                   else f"server did not start within {args.timeout}s")
+            print(f"[harness] ERROR: {msg}")
             proc.terminate()
+            _drain_stderr(proc)
+            results["overall"] = "FAIL"
+            results["error"]   = msg
+            _write_results(results, args.out_dir)
             return 2
 
         print(f"[harness] server is up (PID {proc.pid})")
@@ -322,6 +341,7 @@ def main():
     finally:
         if proc.poll() is None:
             proc.terminate()
+        _drain_stderr(proc)
 
     # ----------------------------------------------------------------
     # Phase 4: validate output files

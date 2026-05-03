@@ -432,13 +432,20 @@ def _start_dbg_server():
         return None
     def serve():
         try:
-            socketserver.TCPServer.allow_reuse_address = True
-            with socketserver.TCPServer(("127.0.0.1", _DBG_PORT), _DbgHandler) as srv:
-                srv.serve_forever()
-        except OSError:
-            pass  # port already in use - silent
+            # Allow reuse of the address to avoid "Address already in use" on restart
+            class ReuseAddrTCPServer(socketserver.TCPServer):
+                allow_reuse_address = True
+            
+            server = ReuseAddrTCPServer(("127.0.0.1", _DBG_PORT), _DbgHandler)
+            print(f"[dbg] HTTP server started on port {_DBG_PORT}", file=sys.stderr, flush=True)
+            server.serve_forever()
+        except Exception as e:
+            print(f"[dbg] HTTP server error: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
     t = threading.Thread(target=serve, daemon=True)
     t.start()
+    time.sleep(0.2)  # Give server a moment to bind
     return t
 
 _DBG_THREAD = _start_dbg_server()
