@@ -1,13 +1,18 @@
 import time, sys, math, random
 import os, json, threading, http.server, socketserver
-import msvcrt  # Windows keyboard input
 
-# Enable ANSI escape codes + UTF-8 in any Windows console (cmd, PowerShell, etc.)
-import ctypes as _ctypes
-_k32 = _ctypes.windll.kernel32
-_k32.SetConsoleOutputCP(65001)  # UTF-8
-_k32.SetConsoleMode(_k32.GetStdHandle(-11),
-                    0x0001 | 0x0002 | 0x0004)  # PROCESSED | WRAP | VIRTUAL_TERMINAL
+# Try to enable ANSI/UTF-8 in Windows console; skip on headless runners
+try:
+    import msvcrt  # Windows keyboard input
+    import ctypes as _ctypes
+    _k32 = _ctypes.windll.kernel32
+    _k32.SetConsoleOutputCP(65001)  # UTF-8
+    _k32.SetConsoleMode(_k32.GetStdHandle(-11),
+                        0x0001 | 0x0002 | 0x0004)  # PROCESSED | WRAP | VIRTUAL_TERMINAL
+except Exception:
+    # Headless runner or non-Windows; msvcrt/ctypes may not be available
+    # HTTP server will still start and serve debug data
+    msvcrt = None
 
 # === LIVE DEBUG SERVER ===
 # Reports renderer state after every keystroke and every frame.
@@ -931,6 +936,9 @@ def draw_ui_enhanced(buffer, colors, frame, camera, fps, mode):
 def get_keyboard_input():
     """Non-blocking keyboard input for Windows. Dedupes within a frame so
     OS auto-repeat at low FPS doesn't catapult the camera."""
+    if not msvcrt:
+        return []  # Headless mode (CI runner)
+    
     seen = set()
     keys = []
     while msvcrt.kbhit():
